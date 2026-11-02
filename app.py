@@ -25,6 +25,23 @@ MAX_UPLOAD_MB = 50
 PORT = int(os.getenv("PORT", "5050"))
 
 
+def read_titles(path: Path) -> dict[str, str]:
+    """Map file name to title from the table in data/SOURCES.md, if it exists."""
+    titles = {}
+    if path.exists():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            if len(cells) >= 2 and cells[0].endswith(".pdf"):
+                titles[cells[0]] = cells[1]
+    return titles
+
+
+def pretty_name(file_name: str) -> str:
+    """'falls-what-you-can-do.pdf' -> 'Falls what you can do'."""
+    stem = Path(file_name).stem.replace("-", " ").replace("_", " ").strip()
+    return stem[:1].upper() + stem[1:]
+
+
 def to_json(obj) -> str:
     """JSON-encode an event, turning NaN or infinite numbers into null so browsers can parse it."""
 
@@ -134,7 +151,11 @@ def create_app(components: Components) -> Flask:
     @app.get("/api/documents")
     def documents():
         files = sorted(data_dir.glob("*.pdf")) if data_dir.exists() else []
-        return jsonify(documents=[{"name": f.name, "size_kb": round(f.stat().st_size / 1024)} for f in files])
+        titles = read_titles(data_dir / "SOURCES.md")
+        return jsonify(documents=[
+            {"name": f.name, "title": titles.get(f.name) or pretty_name(f.name), "size_kb": round(f.stat().st_size / 1024)}
+            for f in files
+        ])
 
     @app.post("/api/upload")
     def upload():

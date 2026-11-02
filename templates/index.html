@@ -4,58 +4,68 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Medical Q&amp;A</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
   <div class="layout">
-    <aside class="panel">
-      <div class="brand">
-        <h1>Medical Q&amp;A</h1>
-        <p>Llama 2 7B · Pinecone · cross-encoder reranking</p>
-      </div>
+    <aside class="library" aria-label="Library">
+      <header class="brand">
+        <svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><path d="M12 3h8v9h9v8h-9v9h-8v-9H3v-8h9z"/></svg>
+        <div>
+          <h1>Medical Q&amp;A</h1>
+          <p>Answers from public health guides, cited to the page.</p>
+        </div>
+      </header>
 
-      <section>
-        <h2>Documents</h2>
-        <ul id="docs" class="docs"><li class="muted">Loading...</li></ul>
-        <form id="upload-form">
-          <label class="file">
-            <input id="file" type="file" accept="application/pdf">
-            <span id="file-label">Choose a PDF</span>
-          </label>
-          <button type="submit" id="upload-btn" class="secondary">Upload and index</button>
-        </form>
-        <p id="upload-status" class="muted small"></p>
+      <section class="shelf">
+        <h2>Library <span id="doc-count" class="count"></span></h2>
+        <ul id="docs" class="docs"><li class="quiet">Loading documents…</li></ul>
       </section>
 
-      <section class="pipeline-section">
-        <h2>Pipeline</h2>
-        <ol class="pipeline small">
-          <li>Embed question (all-MiniLM-L6-v2)</li>
-          <li>Pinecone search, top <span id="fetch-k">10</span></li>
-          <li>Rerank, keep top <span id="top-k">3</span></li>
-          <li>Skip the model if nothing is relevant</li>
-          <li>RetrievalQA with Llama 2, cited by page</li>
+      <form id="upload-form" class="upload">
+        <label class="drop" for="file">
+          <input id="file" type="file" accept="application/pdf">
+          <span id="file-label">Add a PDF to the library</span>
+        </label>
+        <button type="submit" id="upload-btn" class="ghost">Index PDF</button>
+        <p id="upload-status" class="quiet small" role="status"></p>
+      </form>
+
+      <details class="how">
+        <summary>How answers are made</summary>
+        <ol>
+          <li>Your question is embedded with all-MiniLM-L6-v2.</li>
+          <li>Pinecone returns the <span id="fetch-k">10</span> closest passages.</li>
+          <li>A cross-encoder reranks them and keeps the best <span id="top-k">4</span>.</li>
+          <li>If nothing is relevant, the app says so instead of guessing.</li>
+          <li>Llama 2 7B writes the answer and cites each page.</li>
         </ol>
-      </section>
+      </details>
 
-      <p class="muted small disclaimer">General information only, not medical advice. In an emergency, call 911.</p>
+      <p class="disclaimer">General information, not medical advice. In an emergency, call 911.</p>
     </aside>
 
-    <main class="chat">
-      <div id="log" aria-live="polite">
-        <div class="msg bot intro">
-          <p>Ask a question about the indexed documents.</p>
-          <div class="suggestions">
-            <button type="button" class="chip">What are the diabetes ABCs?</button>
-            <button type="button" class="chip">What are the warning signs of a stroke?</button>
-            <button type="button" class="chip">How can older adults prevent falls?</button>
-            <button type="button" class="chip">What triggers asthma attacks?</button>
+    <main class="reader">
+      <div id="log" class="log" aria-live="polite">
+        <section id="welcome" class="welcome">
+          <h2>What would you like to know?</h2>
+          <p>Every answer comes from the guides in the library, with the page it came from.</p>
+          <div class="starters">
+            <button type="button" class="starter">What are the diabetes ABCs?</button>
+            <button type="button" class="starter">What are the warning signs of a stroke?</button>
+            <button type="button" class="starter">How can older adults prevent falls?</button>
+            <button type="button" class="starter">When should I get screened for colorectal cancer?</button>
           </div>
-        </div>
+        </section>
       </div>
-      <form id="ask-form">
-        <textarea id="question" rows="2" maxlength="1000" placeholder="Ask a question (Enter to send, Shift+Enter for a new line)" required></textarea>
-        <button type="submit" id="send">Send</button>
+
+      <form id="ask-form" class="composer">
+        <label for="question" class="sr-only">Your question</label>
+        <textarea id="question" rows="1" maxlength="1000" placeholder="Ask a health question" required></textarea>
+        <button type="submit" id="send">Ask</button>
       </form>
     </main>
   </div>

@@ -2,6 +2,14 @@ const log = document.getElementById("log");
 const form = document.getElementById("ask-form");
 const box = document.getElementById("question");
 const send = document.getElementById("send");
+const docsList = document.getElementById("docs");
+const docCount = document.getElementById("doc-count");
+
+// Matches [p. 7], [page 7], [p. 7.0] and the long form [file.pdf, p. 7].
+const CITE_SPLIT = /(\[(?:[^\[\]]*?,\s*)?p(?:age|\.)?\s*\d+(?:\.0)?\])/i;
+const CITE_MATCH = /^\[(?:[^\[\]]*?,\s*)?p(?:age|\.)?\s*(\d+)(?:\.0)?\]$/i;
+
+let titles = {};
 
 function el(tag, cls, text) {
   const node = document.createElement(tag);
@@ -10,78 +18,107 @@ function el(tag, cls, text) {
   return node;
 }
 
-function scroll() {
+function scrollToEnd() {
   log.scrollTop = log.scrollHeight;
 }
 
-// Render answer text, turning [p. 7] into clickable citations that highlight the matching source.
-function renderAnswer(container, text, sourcesBox, retrievedPages) {
+function titleFor(name) {
+  return titles[name] || name.replace(/\.pdf$/i, "").replace(/[-_]/g, " ");
+}
+
+// Answer text with [p. N] turned into highlighter marks that jump to their source card.
+function renderAnswer(container, text, sourcesBox, pages) {
   container.replaceChildren();
-  text.split(/(\[(?:[^\[\]]*?,\s*)?p(?:age|\.)?\s*\d+(?:\.0)?\])/i).forEach((part) => {
-    const m = part.match(/^\[(?:[^\[\]]*?,\s*)?p(?:age|\.)?\s*(\d+)(?:\.0)?\]$/i);
+  text.split(CITE_SPLIT).forEach((part) => {
+    const m = part.match(CITE_MATCH);
     if (!m) return container.appendChild(document.createTextNode(part));
     const page = Number(m[1]);
-    const ok = retrievedPages.includes(page);
-    const a = el("a", ok ? "cite" : "cite bad", part);
-    a.title = ok ? `Show page ${page}` : "This page was not among the retrieved sources";
-    a.href = "#";
-    a.addEventListener("click", (e) => {
+    const known = pages.includes(page);
+    const mark = el("a", known ? "cite" : "cite bad", `p. ${page}`);
+    mark.href = "#";
+    mark.title = known ? `Show the passage from page ${page}` : `Page ${page} was not among the retrieved passages`;
+    mark.addEventListener("click", (e) => {
       e.preventDefault();
       const card = sourcesBox.querySelector(`[data-page="${page}"]`);
       if (!card) return;
+      card.querySelector("details")?.setAttribute("open", "");
       card.scrollIntoView({ behavior: "smooth", block: "nearest" });
       card.classList.add("flash");
-      setTimeout(() => card.classList.remove("flash"), 1200);
+      setTimeout(() => card.classList.remove("flash"), 1400);
     });
-    container.appendChild(a);
+    container.appendChild(mark);
   });
 }
 
-function renderSources(box, sources) {
-  box.replaceChildren();
-  if (!sources.length) return;
+function renderSources(boxEl, sources) {
+  boxEl.replaceChildren();
+  if (!sources || !sources.length) return;
+  boxEl.appendChild(el("p", "sources-label", sources.length === 1 ? "Source" : `Sources (${sources.length})`));
   sources.forEach((s) => {
-    const card = el("div", "source");
+    const card = el("article", "source");
     card.dataset.page = s.page;
-    const head = el("div", "source-head");
-    head.appendChild(el("b", "", `${s.source}, p. ${s.page}`));
+
+    const tab = el("div", "tab");
+    tab.append(el("small", "", "page"), el("b", "", String(s.page)));
+
+    const body = el("div", "source-body");
+    body.appendChild(el("p", "source-title", titleFor(s.source)));
     if (s.relevance !== null && s.relevance !== undefined) {
-      const bar = el("div", "bar");
-      bar.title = `Relevance ${s.relevance}`;
+      const meta = el("div", "source-meta");
+      const meter = el("div", "meter");
       const fill = el("span");
-      fill.style.width = `${Math.max(4, Math.round(s.relevance * 100))}%`;
-      bar.appendChild(fill);
-      head.appendChild(bar);
+      fill.style.width = `${Math.max(6, Math.round(Math.min(1, s.relevance) * 100))}%`;
+      meter.appendChild(fill);
+      meta.append(meter, el("span", "", `match ${Math.round(Math.min(1, s.relevance) * 100)}%`));
+      body.appendChild(meta);
     }
-    card.appendChild(head);
     const details = el("details");
-    details.appendChild(el("summary", "", "Excerpt"));
-    details.appendChild(el("p", "", s.excerpt + "..."));
-    card.appendChild(details);
-    box.appendChild(card);
+    details.append(el("summary", "", "Read the passage"), el("blockquote", "", `${s.excerpt}…`));
+    body.appendChild(details);
+
+    card.append(tab, body);
+    boxEl.appendChild(card);
   });
+  highlightLibrary(sources.map((s) => s.source));
 }
 
-function addUser(text) {
-  const div = el("div", "msg user");
-  div.appendChild(el("p", "", text));
-  log.appendChild(div);
-  scroll();
+function highlightLibrary(names) {
+  docsList.querySelectorAll("li").forEach((li) => li.classList.toggle("active", names.includes(li.dataset.name)));
+}
+
+function startTimer(label) {
+  const status = el("div", "status");
+  const text = el("span", "", "Searching the library…");
+  const timer = el("span", "timer", "");
+  status.append(el("span", "pulse"), text, timer);
+  const started = performance.now();
+  const id = setInterval(() => {
+    timer.textContent = `${Math.round((performance.now() - started) / 1000)} s`;
+  }, 500);
+  return {
+    node: status,
+    set(msg) { text.textContent = msg; },
+    stop() { clearInterval(id); status.remove(); },
+  };
+}
+
+function seconds(v) {
+  return v === null || v === undefined ? null : `${Number(v).toFixed(1)} s`;
 }
 
 async function ask(question) {
-  addUser(question);
+  document.getElementById("welcome")?.remove();
   send.disabled = true;
 
-  const msg = el("div", "msg bot");
-  const status = el("div", "status");
-  status.append(el("span", "dot"), el("span", "", "Searching documents..."));
-  const answer = el("p", "cursor");
+  const ex = el("section", "exchange");
+  const q = el("h2", "question", question);
+  const status = startTimer();
+  const answer = el("p", "answer");
   const sourcesBox = el("div", "sources");
-  const meta = el("div", "meta");
-  msg.append(status, answer, sourcesBox, meta);
-  log.appendChild(msg);
-  scroll();
+  const timing = el("p", "timing");
+  ex.append(q, status.node, answer, sourcesBox, timing);
+  log.appendChild(ex);
+  scrollToEnd();
 
   let text = "";
   let pages = [];
@@ -93,7 +130,7 @@ async function ask(question) {
     });
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
-      throw new Error(data.error || `Server error ${res.status}`);
+      throw new Error(data.error || `The server returned an error (${res.status}).`);
     }
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
@@ -110,52 +147,58 @@ async function ask(question) {
         if (event.type === "sources") {
           pages = event.sources.map((s) => s.page);
           renderSources(sourcesBox, event.sources);
-          status.lastChild.textContent = "Generating answer...";
+          status.set(`Found ${event.sources.length} relevant passages. Llama 2 is reading them…`);
         } else if (event.type === "token") {
+          if (!text) {
+            status.stop();
+            answer.classList.add("typing");
+          }
           text += event.text;
           renderAnswer(answer, text, sourcesBox, pages);
         } else if (event.type === "error") {
           throw new Error(event.message);
         } else if (event.type === "done") {
-          finish(msg, status, answer, sourcesBox, meta, event);
+          status.stop();
+          finish(ex, answer, sourcesBox, timing, event);
         }
       }
-      scroll();
+      scrollToEnd();
     }
   } catch (err) {
-    status.remove();
-    answer.classList.remove("cursor");
-    msg.classList.add("error");
-    answer.textContent = err.message.includes("fetch") ? "Could not reach the server. Check the terminal running app.py." : err.message;
+    status.stop();
+    answer.classList.remove("typing");
+    answer.className = "answer error";
+    answer.textContent = /fetch|network/i.test(err.message)
+      ? "The app stopped responding. Check the terminal running app.py, then ask again."
+      : err.message;
   } finally {
     send.disabled = false;
     box.focus();
   }
 }
 
-function finish(msg, status, answer, sourcesBox, meta, event) {
-  status.remove();
-  answer.classList.remove("cursor");
+function finish(ex, answer, sourcesBox, timing, event) {
+  answer.classList.remove("typing");
   if (event.abstained) {
-    msg.insertBefore(el("span", "badge", "Not found in the documents"), answer);
-    answer.textContent = event.answer;
+    ex.insertBefore(el("p", "note", "Not covered by the library"), answer);
+    answer.textContent = "The guides in the library don't answer this. Try rephrasing, or add a PDF that covers it.";
     sourcesBox.remove();
+    highlightLibrary([]);
   } else {
     const pages = event.sources.map((s) => s.page);
     renderAnswer(answer, event.answer, sourcesBox, pages);
     renderSources(sourcesBox, event.sources);
     if (event.uncited_pages && event.uncited_pages.length) {
-      msg.insertBefore(el("span", "badge", `Cites pages not retrieved: ${event.uncited_pages.join(", ")}`), answer);
+      ex.insertBefore(el("p", "note", `Cites a page that wasn't retrieved (p. ${event.uncited_pages.join(", p. ")}), so check it`), answer);
     } else if (!event.cited_pages || !event.cited_pages.length) {
-      msg.insertBefore(el("span", "badge", "No page citations"), answer);
+      ex.insertBefore(el("p", "note", "No page citations in this answer, so check the sources below"), answer);
     }
   }
   const t = event.timings || {};
   const parts = [];
-  if (t.retrieval_s !== undefined) parts.push(`retrieval ${t.retrieval_s}s`);
-  if (t.first_token_s) parts.push(`first token ${t.first_token_s}s`);
-  if (t.generation_s) parts.push(`total ${t.generation_s}s`);
-  meta.textContent = parts.join(" · ");
+  if (t.retrieval_s !== undefined) parts.push(`Found sources in ${seconds(t.retrieval_s)}`);
+  if (t.generation_s) parts.push(`answered in ${seconds(t.generation_s)}`);
+  timing.textContent = parts.length ? `${parts.join(", ")}.` : "";
 }
 
 form.addEventListener("submit", (e) => {
@@ -163,6 +206,7 @@ form.addEventListener("submit", (e) => {
   const q = box.value.trim();
   if (!q || send.disabled) return;
   box.value = "";
+  autosize();
   ask(q);
 });
 box.addEventListener("keydown", (e) => {
@@ -171,14 +215,18 @@ box.addEventListener("keydown", (e) => {
     form.requestSubmit();
   }
 });
-document.querySelectorAll(".chip").forEach((chip) =>
-  chip.addEventListener("click", () => {
-    if (!send.disabled) ask(chip.textContent);
+function autosize() {
+  box.style.height = "auto";
+  box.style.height = `${Math.min(box.scrollHeight, 160)}px`;
+}
+box.addEventListener("input", autosize);
+document.querySelectorAll(".starter").forEach((b) =>
+  b.addEventListener("click", () => {
+    if (!send.disabled) ask(b.textContent);
   })
 );
 
-// Documents panel and upload
-const docsList = document.getElementById("docs");
+// Library and upload
 const fileInput = document.getElementById("file");
 const fileLabel = document.getElementById("file-label");
 const uploadForm = document.getElementById("upload-form");
@@ -189,38 +237,52 @@ async function loadDocs() {
   try {
     const data = await (await fetch("/api/documents")).json();
     docsList.replaceChildren();
-    if (!data.documents.length) docsList.appendChild(el("li", "muted", "No PDFs yet"));
-    data.documents.forEach((d) => {
-      const li = el("li", "", d.name + " ");
-      li.appendChild(el("span", "", `${d.size_kb} KB`));
-      docsList.appendChild(li);
-    });
+    titles = {};
+    data.documents.forEach((d) => (titles[d.name] = d.title));
+    const n = data.documents.length;
+    docCount.textContent = n ? `${n} ${n === 1 ? "guide" : "guides"}` : "";
+    if (!data.documents.length) {
+      docsList.appendChild(el("li", "quiet", "No documents yet. Add a PDF below."));
+      return;
+    }
+    data.documents
+      .slice()
+      .sort((a, b) => a.title.localeCompare(b.title))
+      .forEach((d) => {
+        const li = el("li", "", d.title);
+        li.dataset.name = d.name;
+        li.title = d.name;
+        docsList.appendChild(li);
+      });
   } catch {
-    docsList.replaceChildren(el("li", "muted", "Could not load documents"));
+    docsList.replaceChildren(el("li", "quiet", "Couldn't load the library."));
   }
 }
 
 fileInput.addEventListener("change", () => {
-  fileLabel.textContent = fileInput.files[0] ? fileInput.files[0].name : "Choose a PDF";
+  fileLabel.textContent = fileInput.files[0] ? fileInput.files[0].name : "Add a PDF to the library";
 });
 
 uploadForm.addEventListener("submit", async (e) => {
   e.preventDefault();
-  if (!fileInput.files[0]) return (uploadStatus.textContent = "Choose a PDF first.");
+  if (!fileInput.files[0]) {
+    uploadStatus.textContent = "Choose a PDF first.";
+    return;
+  }
   const body = new FormData();
   body.append("file", fileInput.files[0]);
   uploadBtn.disabled = true;
-  uploadStatus.textContent = "Chunking, embedding, and upserting to Pinecone...";
+  uploadStatus.textContent = "Indexing: splitting, embedding, and saving to Pinecone…";
   try {
     const res = await fetch("/api/upload", { method: "POST", body });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error);
-    uploadStatus.textContent = `Indexed ${data.name}: ${data.pages} pages, ${data.chunks} chunks.`;
+    uploadStatus.textContent = `Indexed ${data.name}: ${data.pages} pages, ${data.chunks} passages.`;
     fileInput.value = "";
-    fileLabel.textContent = "Choose a PDF";
+    fileLabel.textContent = "Add a PDF to the library";
     loadDocs();
   } catch (err) {
-    uploadStatus.textContent = err.message || "Upload failed.";
+    uploadStatus.textContent = err.message || "Indexing failed.";
   } finally {
     uploadBtn.disabled = false;
   }

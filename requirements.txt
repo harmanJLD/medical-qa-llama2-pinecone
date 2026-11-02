@@ -1,0 +1,14 @@
+langchain>=1.0
+langchain-classic>=1.0
+langchain-community>=0.4
+langchain-text-splitters>=1.0
+langchain-huggingface>=1.0
+langchain-pinecone>=0.2
+pinecone>=7.0
+sentence-transformers>=2.7
+llama-cpp-python>=0.3
+pypdf>=5.0
+flask>=3.0
+python-dotenv>=1.0
+tqdm>=4.66
+pytest>=8.0

@@ -36,6 +36,7 @@ def main() -> None:
     index = get_pinecone_index(config, create=True)
     n = batch_upsert(index, chunks, get_embeddings(config), config.namespace, config.batch_size)
     print(f"Upserted {n} vectors to Pinecone index '{config.index_name}' (namespace '{config.namespace}').")
+    print("New vectors can take a few seconds to become searchable.")
 
 
 if __name__ == "__main__":

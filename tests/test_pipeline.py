@@ -1,15 +1,23 @@
-"""Offline tests: a generated PDF, fake embeddings, an in-memory vector store, and a fake LLM.
-No Pinecone account or model download is needed."""
+"""Offline tests: a generated PDF, fake embeddings, an in-memory vector store, a fake reranker,
+and a fake streaming LLM. No Pinecone account or model download is needed."""
+import io
+import json
 from pathlib import Path
+from typing import Any
 
 import pytest
+from langchain_core.callbacks import CallbackManagerForLLMRun
+from langchain_core.documents import Document
 from langchain_core.embeddings import DeterministicFakeEmbedding
-from langchain_core.language_models import FakeListLLM
+from langchain_core.language_models import LLM
 from langchain_core.vectorstores import InMemoryVectorStore
 
-from app import create_app
-from medqa.chain import PROMPT, ask, build_qa_chain
+from app import Components, create_app
+from medqa.chain import NO_ANSWER, PROMPT, build_qa_chain
+from medqa.config import Config
 from medqa.ingest import clean_page_text, load_pdfs, split_documents
+from medqa.retrieval import RerankingRetriever
+from medqa.service import QAService, check_citations, to_sources
 from medqa.vectorstore import batch_upsert
 
 PAGES = [
@@ -20,14 +28,12 @@ PAGES = [
 ]
 
 
-@pytest.fixture(scope="module")
-def pdf_path(tmp_path_factory) -> Path:
+def make_pdf(path: Path, pages: list[str]) -> Path:
     from reportlab.lib.pagesizes import letter
     from reportlab.pdfgen import canvas
 
-    path = tmp_path_factory.mktemp("data") / "reference.pdf"
     c = canvas.Canvas(str(path), pagesize=letter)
-    for text in PAGES:
+    for text in pages:
         y = 740
         words = text.split()
         for i in range(0, len(words), 12):
@@ -38,66 +44,147 @@ def pdf_path(tmp_path_factory) -> Path:
     return path
 
 
+@pytest.fixture(scope="module")
+def pdf_path(tmp_path_factory) -> Path:
+    return make_pdf(tmp_path_factory.mktemp("data") / "reference.pdf", PAGES)
+
+
+class KeywordReranker:
+    """Fake cross-encoder: relevance is the share of question words found in the passage."""
+
+    def score(self, query, texts):
+        words = {w for w in query.lower().replace("?", "").split() if len(w) > 3}
+        return [len(words & set(t.lower().split())) / max(len(words), 1) for t in texts]
+
+
+class FakeStreamingLLM(LLM):
+    """Emits a fixed answer token by token through callbacks, like LlamaCpp with streaming=True."""
+
+    answer: str = "Symptoms include tiredness and pale skin [p. 1]."
+
+    @property
+    def _llm_type(self) -> str:
+        return "fake-streaming"
+
+    def _call(self, prompt: str, stop=None, run_manager: CallbackManagerForLLMRun | None = None, **kw: Any) -> str:
+        assert "[reference.pdf, p." in prompt  # chunks are labeled with their page
+        for token in self.answer.split(" "):
+            if run_manager:
+                run_manager.on_llm_new_token(token + " ")
+        return self.answer
+
+
+@pytest.fixture(scope="module")
+def retriever(pdf_path):
+    chunks = split_documents(load_pdfs(pdf_path), 300, 50)
+    store = InMemoryVectorStore.from_documents(chunks, DeterministicFakeEmbedding(size=384))
+    return RerankingRetriever(vectorstore=store, reranker=KeywordReranker(), fetch_k=6, top_k=2, min_relevance=0.3)
+
+
+@pytest.fixture(scope="module")
+def service(retriever):
+    return QAService(build_qa_chain(FakeStreamingLLM(), retriever), retriever)
+
+
 def test_clean_page_text():
     assert clean_page_text("hemo-\nglobin  and   iron") == "hemoglobin and iron"
+    assert clean_page_text("Steps to\nmanage your\ndiabetes.") == "Steps to manage your diabetes."
 
 
 def test_load_and_split(pdf_path):
     pages = load_pdfs(pdf_path)
     assert [p.metadata["page"] for p in pages] == [1, 2]
     chunks = split_documents(pages, chunk_size=300, chunk_overlap=50)
-    assert len(chunks) > 2
-    assert all(len(c.page_content) <= 300 for c in chunks)
+    assert len(chunks) > 2 and all(len(c.page_content) <= 300 for c in chunks)
     ids = [c.metadata["id"] for c in chunks]
     assert len(set(ids)) == len(ids)
-    # Same input gives the same IDs, so re-ingesting overwrites instead of duplicating.
-    assert ids == [c.metadata["id"] for c in split_documents(pages, 300, 50)]
-
-
-class FakeIndex:
-    def __init__(self):
-        self.calls = []
-
-    def upsert(self, vectors, namespace):
-        self.calls.append((len(vectors), namespace, vectors[0]))
+    assert ids == [c.metadata["id"] for c in split_documents(pages, 300, 50)]  # stable IDs
 
 
 def test_batch_upsert(pdf_path):
+    class FakeIndex:
+        calls = []
+
+        def upsert(self, vectors, namespace):
+            self.calls.append((len(vectors), namespace, vectors[0]))
+
     chunks = split_documents(load_pdfs(pdf_path), 200, 20)
     index = FakeIndex()
-    n = batch_upsert(index, chunks, DeterministicFakeEmbedding(size=384), "test", batch_size=3)
-    assert n == len(chunks)
-    assert sum(c[0] for c in index.calls) == len(chunks)
+    assert batch_upsert(index, chunks, DeterministicFakeEmbedding(size=384), "test", batch_size=3) == len(chunks)
     assert max(c[0] for c in index.calls) <= 3
-    first = index.calls[0][2]
-    assert len(first["values"]) == 384
-    assert {"text", "source", "page"} <= set(first["metadata"])
+    assert len(index.calls[0][2]["values"]) == 384
+    assert {"text", "source", "page"} <= set(index.calls[0][2]["metadata"])
 
 
-@pytest.fixture(scope="module")
-def chain(pdf_path):
-    chunks = split_documents(load_pdfs(pdf_path), 300, 50)
-    store = InMemoryVectorStore.from_documents(chunks, DeterministicFakeEmbedding(size=384))
-    llm = FakeListLLM(responses=["Symptoms include tiredness and pale skin."] * 10)
-    return build_qa_chain(llm, store.as_retriever(search_kwargs={"k": 2}))
+def test_reranker_orders_and_gates(retriever):
+    docs = retriever.search("What are the symptoms of anemia like tiredness?")
+    assert docs and docs[0].metadata["page"] == 1
+    assert docs[0].metadata["relevance"] >= docs[-1].metadata["relevance"]
+    assert retriever.search("Who won the football championship yesterday?") == []
 
 
-def test_prompt_uses_llama2_format():
+def test_prompt_format():
     text = PROMPT.format(context="ctx", question="q")
-    assert text.startswith("[INST] <<SYS>>") and text.endswith("[/INST]")
+    assert text.startswith("[INST] <<SYS>>") and text.endswith("[/INST]") and "[p. 4]" in text
 
 
-def test_ask_returns_answer_and_sources(chain):
-    result = ask(chain, "What are the symptoms of anemia?")
-    assert result.answer == "Symptoms include tiredness and pale skin."
-    assert result.sources and result.sources[0]["source"] == "reference.pdf"
-    assert result.sources[0]["page"] in (1, 2)
+def test_citation_check():
+    sources = to_sources([Document(page_content="x", metadata={"source": "a", "page": 3})])
+    assert check_citations("Fact [p. 3]. Other [page 9].", sources) == ([3], [9])
 
 
-def test_flask_endpoint(chain):
-    client = create_app(chain=chain).test_client()
+def test_ask_answers_with_citations(service):
+    a = service.ask("What are the symptoms of anemia like tiredness?")
+    assert not a.abstained and a.cited_pages == [1] and a.uncited_pages == []
+    assert a.sources[0].page == 1 and a.timings["generation_s"] >= 0
+
+
+def test_ask_abstains_without_calling_model(service):
+    a = service.ask("Who won the football championship yesterday?")
+    assert a.abstained and a.answer == NO_ANSWER and "generation_s" not in a.timings
+
+
+def test_stream_events(service):
+    events = list(service.stream("What are the symptoms of anemia like tiredness?"))
+    kinds = [e["type"] for e in events]
+    assert kinds[0] == "sources" and kinds[-1] == "done" and kinds.count("token") > 3
+    assert events[-1]["cited_pages"] == [1]
+
+
+def test_flask_routes(service, tmp_path):
+    config = Config()
+    config.data_dir = str(tmp_path)
+    client = create_app(Components(service, config=config)).test_client()
     assert client.get("/").status_code == 200
-    ok = client.post("/api/ask", json={"question": "What triggers asthma?"})
-    assert ok.status_code == 200 and ok.get_json()["answer"]
+    assert client.get("/api/health").get_json()["status"] == "ok"
+
+    ok = client.post("/api/ask", json={"question": "What are the symptoms of anemia like tiredness?"})
+    assert ok.status_code == 200 and ok.get_json()["cited_pages"] == [1]
     assert client.post("/api/ask", json={"question": "  "}).status_code == 400
-    assert client.post("/api/ask", json={"question": "x" * 1001}).status_code == 400
+
+    stream = client.post("/api/stream", json={"question": "What are the symptoms of anemia like tiredness?"})
+    events = [json.loads(l[6:]) for l in stream.get_data(as_text=True).split("\n\n") if l.startswith("data: ")]
+    assert events[0]["type"] == "sources" and events[-1]["type"] == "done"
+
+    assert client.get("/api/documents").get_json() == {"documents": []}
+    bad = client.post("/api/upload", data={"file": (io.BytesIO(b"x"), "notes.txt")}, content_type="multipart/form-data")
+    assert bad.status_code == 400
+
+
+def test_upload_indexes_pdf(service, tmp_path):
+    class FakeIndex:
+        count = 0
+
+        def upsert(self, vectors, namespace):
+            FakeIndex.count += len(vectors)
+
+    config = Config()
+    config.data_dir = str(tmp_path)
+    comps = Components(service, index=FakeIndex(), embeddings=DeterministicFakeEmbedding(size=384), config=config)
+    client = create_app(comps).test_client()
+    pdf = make_pdf(tmp_path / "src.pdf", PAGES).read_bytes()
+    (tmp_path / "src.pdf").unlink()
+    res = client.post("/api/upload", data={"file": (io.BytesIO(pdf), "new guide.pdf")}, content_type="multipart/form-data")
+    body = res.get_json()
+    assert res.status_code == 200 and body["pages"] == 2 and body["vectors"] == FakeIndex.count > 0
+    assert client.get("/api/documents").get_json()["documents"][0]["name"] == "new_guide.pdf"

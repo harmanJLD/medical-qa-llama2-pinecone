@@ -39,6 +39,15 @@ class Config:
     chunk_size: int = field(default_factory=lambda: int(_get("CHUNK_SIZE", "800")))
     chunk_overlap: int = field(default_factory=lambda: int(_get("CHUNK_OVERLAP", "100")))
     top_k: int = field(default_factory=lambda: int(_get("TOP_K", "3")))
+    fetch_k: int = field(default_factory=lambda: int(_get("FETCH_K", "10")))
+    rerank_model: str = field(
+        default_factory=lambda: _get("RERANK_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")
+    )
+    use_reranker: bool = field(default_factory=lambda: _get("USE_RERANKER", "true").lower() == "true")
+    # Minimum relevance (0-1) of the best chunk before the model is asked to answer.
+    min_relevance: float = field(default_factory=lambda: float(_get("MIN_RELEVANCE", "0.05")))
+    # Used when the reranker is off: minimum Pinecone cosine similarity.
+    min_vector_score: float = field(default_factory=lambda: float(_get("MIN_VECTOR_SCORE", "0.30")))
     batch_size: int = 100
 
     def require_pinecone(self) -> None:

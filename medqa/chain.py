@@ -27,7 +27,7 @@ PROMPT = PromptTemplate(template=PROMPT_TEMPLATE, input_variables=["context", "q
 
 # How each retrieved chunk is shown to the model, so it can cite pages.
 DOCUMENT_PROMPT = PromptTemplate(
-    template="[{source}, p. {page}]\n{page_content}",
+    template="(Excerpt from {source}, page {page})\n{page_content}",
     input_variables=["source", "page", "page_content"],
 )
 

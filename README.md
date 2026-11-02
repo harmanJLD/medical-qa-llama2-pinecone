@@ -6,7 +6,7 @@ Author: Harmandeep Kaur
 
 ## Features
 
-- **Two-stage retrieval.** Pinecone returns the top 10 chunks by vector similarity, and a cross-encoder (`ms-marco-MiniLM-L-6-v2`) rescores each one against the question to keep the best 3. The reranker reads the question and passage together, which catches matches that embeddings alone miss.
+- **Two-stage retrieval.** Pinecone returns the top 10 chunks by vector similarity, and a cross-encoder (`ms-marco-MiniLM-L-6-v2`) rescores each one against the question to keep the best 4. The reranker reads the question and passage together, which catches matches that embeddings alone miss.
 - **Relevance check.** If no chunk passes a relevance threshold, the app answers "I don't know based on the available reference" without calling the model. This cuts hallucinated answers to off-topic questions and saves several seconds.
 - **Page-cited answers.** Each chunk is shown to Llama 2 with its file name and page number, and the model cites pages inline, like `[p. 7]`. The app then checks every citation against the retrieved pages and flags any that point to a page it never saw.
 - **Streaming responses.** Tokens stream from llama.cpp through LangChain callbacks and server-sent events, so text appears as it is generated. The app shows retrieval time, time to first token, and total time.
@@ -23,7 +23,7 @@ Ingestion (CLI or browser upload)
       ─► all-MiniLM-L6-v2 (384-d) ─► batch upsert, 100 per request ─► Pinecone serverless (AWS us-east-1)
 
 Question answering
-  question ─► Pinecone top 10 ─► cross-encoder rerank ─► top 3
+  question ─► Pinecone top 10 ─► cross-encoder rerank ─► top 4
            ─► relevance below threshold? ─► "I don't know" (model not called)
            ─► RetrievalQA (stuff) with page-labeled excerpts ─► Llama 2 7B Q4_K_M (llama.cpp, streaming)
            ─► citation check ─► server-sent events ─► chat UI
@@ -41,11 +41,23 @@ Question answering
 | `medqa/service.py` | Relevance check, citation check, streaming, timings |
 | `app.py` | Flask app: chat, streaming, upload, and document APIs |
 | `templates/`, `static/` | Web interface |
+| `scripts/download_corpus.py` | Download the public-domain CDC starter corpus |
 | `scripts/ingest.py`, `scripts/ask.py` | Command-line ingestion and Q&A |
 | `eval/evaluate.py` | Evaluation harness |
+| `notebooks/colab_demo.ipynb` | Run everything on a free Colab GPU |
 | `tests/` | Offline tests |
 
-## Setup
+## Run on Google Colab (free GPU)
+
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/harmanJLD/medical-qa-llama2-pinecone/blob/main/notebooks/colab_demo.ipynb)
+
+The notebook runs the full app on a free T4 GPU, where answers take seconds instead of the 40 to 50 seconds a laptop CPU needs.
+
+1. Open the notebook with the badge above, then choose **Runtime > Change runtime type > T4 GPU**.
+2. Add your Pinecone key as a Colab secret named `PINECONE_API_KEY` (key icon in the left sidebar) and enable notebook access.
+3. Choose **Runtime > Run all**. The notebook installs CUDA-enabled llama.cpp, downloads the model and a sample PDF, indexes it in Pinecone, runs the tests, starts the app, and prints a link to the chat interface.
+
+## Local setup
 
 **1. Install** (Python 3.10 or newer)
 
@@ -57,22 +69,23 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-On Apple Silicon, build llama.cpp with Metal support for GPU speed:
+On Apple Silicon you can build llama.cpp with Metal support for GPU speed. Some llama-cpp-python versions crash on Metal during generation (`GGML_ASSERT(buf_dst) failed`); if that happens, keep `LLAMA_GPU_LAYERS=0` to run on the CPU.
 `CMAKE_ARGS="-DGGML_METAL=on" pip install --force-reinstall --no-cache-dir llama-cpp-python`
 
 **2. Add keys, model, and documents**
 
 - Put your Pinecone API key in `.env` as `PINECONE_API_KEY`.
 - Download the model: `hf download TheBloke/Llama-2-7B-Chat-GGUF llama-2-7b-chat.Q4_K_M.gguf --local-dir models`
-- Add a medical reference PDF to `data/`. For example, the public-domain CDC/NIH booklet *4 Steps to Manage Your Diabetes for Life*:
-  `curl -L -o data/4-steps-manage-diabetes.pdf "https://stacks.cdc.gov/view/cdc/55506/cdc_55506_DS1.pdf"`
+- Download the starter corpus: 17 public-domain CDC patient guides covering diabetes, prediabetes, high blood pressure, asthma, kidney disease, stroke, colorectal cancer screening, falls, concussion, arthritis, flu, and antibiotics. Sources are listed in `data/SOURCES.md` after download.
+  `python scripts/download_corpus.py`
+- Or add your own PDFs to `data/`.
 
 **3. Ingest and run**
 
 ```bash
 python scripts/ingest.py --dry-run   # check chunking
 python scripts/ingest.py             # create the serverless index and upsert vectors
-python app.py                        # loads all models, then serves http://127.0.0.1:5000
+python app.py                        # loads all models, then serves http://127.0.0.1:5050
 ```
 
 Command-line Q&A: `python scripts/ask.py "What is a good A1C goal?"`
@@ -112,9 +125,10 @@ Results are saved to `eval/results.json`, and a summary table is printed. Raise 
 |---|---|---|
 | `PINECONE_INDEX` | `medical-qa` | Index name |
 | `PINECONE_CLOUD` / `PINECONE_REGION` | `aws` / `us-east-1` | Serverless location |
-| `FETCH_K` / `TOP_K` | `10` / `3` | Candidates from Pinecone / chunks kept after reranking |
+| `FETCH_K` / `TOP_K` | `10` / `4` | Candidates from Pinecone / chunks kept after reranking |
 | `USE_RERANKER` | `true` | Turn the cross-encoder on or off |
 | `MIN_RELEVANCE` | `0.05` | Minimum reranker relevance (0 to 1) before answering |
+| `PORT` | `5050` | Web server port (5000 is used by AirPlay on macOS) |
 | `LLAMA_GPU_LAYERS` | `0` | Layers offloaded to GPU (`-1` for all) |
 | `CHUNK_SIZE` / `CHUNK_OVERLAP` | `800` / `100` | Chunking, in characters |
 

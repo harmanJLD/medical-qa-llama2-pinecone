@@ -38,10 +38,10 @@ class Config:
     data_dir: str = field(default_factory=lambda: _get("DATA_DIR", "data"))
     chunk_size: int = field(default_factory=lambda: int(_get("CHUNK_SIZE", "800")))
     chunk_overlap: int = field(default_factory=lambda: int(_get("CHUNK_OVERLAP", "100")))
-    top_k: int = field(default_factory=lambda: int(_get("TOP_K", "3")))
+    top_k: int = field(default_factory=lambda: int(_get("TOP_K", "4")))
     fetch_k: int = field(default_factory=lambda: int(_get("FETCH_K", "10")))
     rerank_model: str = field(
-        default_factory=lambda: _get("RERANK_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")
+        default_factory=lambda: _get("RERANK_MODEL", "cross-encoder/ms-marco-MiniLM-L6-v2")
     )
     use_reranker: bool = field(default_factory=lambda: _get("USE_RERANKER", "true").lower() == "true")
     # Minimum relevance (0-1) of the best chunk before the model is asked to answer.

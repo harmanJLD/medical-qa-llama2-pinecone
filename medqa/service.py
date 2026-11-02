@@ -15,7 +15,8 @@ from langchain_core.documents import Document
 from .chain import NO_ANSWER
 from .retrieval import RerankingRetriever
 
-_PAGE_CITE = re.compile(r"\[p(?:age|\.)?\s*(\d+)\]", re.IGNORECASE)
+# Matches [p. 7], [page 7], [p.7.0], and the longer form [file.pdf, p. 7] that small models sometimes copy.
+_PAGE_CITE = re.compile(r"\[(?:[^\[\]]*?,\s*)?p(?:age|\.)?\s*(\d+)(?:\.0)?\]", re.IGNORECASE)
 
 
 @dataclass

@@ -1,11 +1,13 @@
 """Flask web app: streaming medical Q&A with page citations and PDF upload.
 
-    python app.py      # http://127.0.0.1:5000
+    python app.py      # http://127.0.0.1:5050 (set PORT to change)
 """
 from __future__ import annotations
 
 import json
 import logging
+import math
+import os
 import time
 from pathlib import Path
 
@@ -19,6 +21,23 @@ log = logging.getLogger("medqa")
 
 MAX_QUESTION_CHARS = 1000
 MAX_UPLOAD_MB = 50
+# Port 5000 is taken by AirPlay Receiver on macOS, so the default is 5050.
+PORT = int(os.getenv("PORT", "5050"))
+
+
+def to_json(obj) -> str:
+    """JSON-encode an event, turning NaN or infinite numbers into null so browsers can parse it."""
+
+    def clean(v):
+        if isinstance(v, float) and not math.isfinite(v):
+            return None
+        if isinstance(v, dict):
+            return {k: clean(x) for k, x in v.items()}
+        if isinstance(v, (list, tuple)):
+            return [clean(x) for x in v]
+        return v
+
+    return json.dumps(clean(obj))
 
 
 class Components:
@@ -47,7 +66,7 @@ class Components:
         retriever = build_retriever(config, store)
         log.info("Loading Llama 2 from %s (gpu layers: %s)", config.llama_model_path, config.llama_gpu_layers)
         chain = build_qa_chain(load_llama(config), retriever)
-        log.info("Ready in %.1fs. Open http://127.0.0.1:5000", time.perf_counter() - t)
+        log.info("Ready in %.1fs. Open http://127.0.0.1:%d", time.perf_counter() - t, PORT)
         return cls(QAService(chain, retriever), index, embeddings, config)
 
 
@@ -90,7 +109,7 @@ def create_app(components: Components) -> Flask:
         except Exception as exc:
             log.exception("Failed to answer")
             return jsonify(error=f"Could not answer: {exc}"), 500
-        return jsonify(result.to_dict())
+        return app.response_class(to_json(result.to_dict()), mimetype="application/json")
 
     @app.post("/api/stream")
     def stream():
@@ -101,10 +120,10 @@ def create_app(components: Components) -> Flask:
         def events():
             try:
                 for event in components.service.stream(question):
-                    yield f"data: {json.dumps(event)}\n\n"
+                    yield f"data: {to_json(event)}\n\n"
             except Exception as exc:
                 log.exception("Streaming failed")
-                yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
+                yield f"data: {to_json({'type': 'error', 'message': str(exc)})}\n\n"
 
         return Response(
             stream_with_context(events()),
@@ -150,4 +169,4 @@ def create_app(components: Components) -> Flask:
 
 
 if __name__ == "__main__":
-    create_app(Components.load(Config())).run(host="127.0.0.1", port=5000, threaded=True)
+    create_app(Components.load(Config())).run(host="127.0.0.1", port=PORT, threaded=True)

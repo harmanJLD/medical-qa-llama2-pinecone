@@ -17,8 +17,8 @@ function scroll() {
 // Render answer text, turning [p. 7] into clickable citations that highlight the matching source.
 function renderAnswer(container, text, sourcesBox, retrievedPages) {
   container.replaceChildren();
-  text.split(/(\[p(?:age|\.)?\s*\d+\])/i).forEach((part) => {
-    const m = part.match(/^\[p(?:age|\.)?\s*(\d+)\]$/i);
+  text.split(/(\[(?:[^\[\]]*?,\s*)?p(?:age|\.)?\s*\d+(?:\.0)?\])/i).forEach((part) => {
+    const m = part.match(/^\[(?:[^\[\]]*?,\s*)?p(?:age|\.)?\s*(\d+)(?:\.0)?\]$/i);
     if (!m) return container.appendChild(document.createTextNode(part));
     const page = Number(m[1]);
     const ok = retrievedPages.includes(page);

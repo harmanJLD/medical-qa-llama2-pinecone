@@ -59,7 +59,7 @@ On Apple Silicon, install llama.cpp with Metal support for faster answers:
 
 - Create a free Pinecone account and put the API key in `.env` as `PINECONE_API_KEY`.
 - Download the model into `models/` (see `models/README.md`):
-  `huggingface-cli download TheBloke/Llama-2-7B-Chat-GGUF llama-2-7b-chat.Q4_K_M.gguf --local-dir models`
+  `hf download TheBloke/Llama-2-7B-Chat-GGUF llama-2-7b-chat.Q4_K_M.gguf --local-dir models`
 - Put a medical reference PDF in `data/`. Public-domain publications from NIH, CDC, or NCI work well.
 
 **3. Ingest**
